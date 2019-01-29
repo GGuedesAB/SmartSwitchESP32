@@ -12,6 +12,10 @@ typedef struct SSIDListCount {
 const byte interruptPin = 27;
 const byte relayPin = 25;
 
+TaskHandle_t wifiListHandle;
+static uint8_t taskCoreZero = 0;
+static uint8_t taskCoreOne  = 1;
+
 int connection_status;
 char buff [20];
 String new_ssid;
@@ -29,7 +33,6 @@ portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 
 String prepareConnectionPage () {
   //Builds WiFi connections list when client requests the page
-  mainWiFiList = availableSSIDs();
   //printSSIDList(wifiList);
   int i = 0;
   String wifiOptions;
@@ -236,6 +239,8 @@ int createNewConnection (char* ssid, char* password) {
     Serial.println(ssid);
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
+    //Passes handle to function that deletes task
+    vTaskDelete(wifiListHandle);
 
     if (MDNS.begin("esp32")) {
       Serial.println("MDNS responder started");
@@ -375,12 +380,10 @@ void emergencyFixLight () {
 }
 
  
-void setup() {
+void setup () {
   Serial.begin(115200);
   global_light_status = "off";
   Serial.println(global_light_status);
-  //Turn off the lights
-  delay(200);
   boolean result = WiFi.softAP("ESPsoft", "maniot@winet");
   if(result == true) {
     Serial.println("Ready");
@@ -397,25 +400,81 @@ void setup() {
   server.on("/commands", handleCommands);
   server.on("/values", handleValues);
   server.onNotFound(handleNotFound);
-  
   server.begin();
+
+  xTaskCreatePinnedToCore(
+                          createWiFiList,   /* função que implementa a tarefa */
+                          "WiFi List",      /* nome da tarefa */
+                          10000,            /* número de palavras a serem alocadas para uso com a pilha da tarefa */
+                          NULL,             /* parâmetro de entrada para a tarefa (pode ser NULL) */
+                          2,                /* prioridade da tarefa (0 a N) */
+                          &wifiListHandle,  /* referência para a tarefa (pode ser NULL) */
+                          taskCoreZero);    /* Núcleo que executará a tarefa */
+  delay(500); //tempo para a tarefa iniciar
+                          
+
+  xTaskCreatePinnedToCore(
+                          handleLightSwitch, /* função que implementa a tarefa */
+                          "Light Switch",    /* nome da tarefa */
+                          10000,             /* número de palavras a serem alocadas para uso com a pilha da tarefa */
+                          NULL,              /* parâmetro de entrada para a tarefa (pode ser NULL) */
+                          1,                 /* prioridade da tarefa (0 a N) */
+                          NULL,              /* referência para a tarefa (pode ser NULL) */
+                          taskCoreZero);     /* Núcleo que executará a tarefa */
+
+  delay(500); //tempo para a tarefa iniciar
+
+  xTaskCreatePinnedToCore(
+                          webServiceRun,    /* função que implementa a tarefa */
+                          "Web Service",    /* nome da tarefa */
+                          10000,            /* número de palavras a serem alocadas para uso com a pilha da tarefa */
+                          NULL,             /* parâmetro de entrada para a tarefa (pode ser NULL) */
+                          3,                /* prioridade da tarefa (0 a N) */
+                          NULL,             /* referência para a tarefa (pode ser NULL) */
+                          taskCoreOne);     /* Núcleo que executará a tarefa */
+  delay(500); //tempo para a tarefa iniciar
+}
+
+void loop () {
+  
+}
+
+void webServiceRun (void* pvParameters) {
+  Serial.println("Starting WebService.");
+  while (true) {
+    server.handleClient(); 
+  }
+}
+
+void createWiFiList (void* pvParameters) {
+  while (true){
+    Serial.println("Generating WiFi list...");
+    mainWiFiList = availableSSIDs();
+    Serial.println("WiFi list finished.");
+    vTaskDelay(10000);
+  }
 }
  
-void loop() {
-  server.handleClient();
-  if(digitalRead(interruptPin) == HIGH) {
-    Serial.println("There was an interruption.");
-    if (global_light_status == "on") {
-      global_light_status = "off";
-      digitalWrite(relayPin, LOW);
-    }
-    else if (global_light_status == "off") {
-      global_light_status = "on";
-      digitalWrite(relayPin, HIGH);
+void handleLightSwitch (void* pvParameters) {
+  Serial.println("Starting Switch.");
+  while(true) {
+    if(digitalRead(interruptPin) == HIGH) {
+      Serial.println("There was an interruption.");
+      if (global_light_status == "on") {
+        global_light_status = "off";
+        digitalWrite(relayPin, LOW);
+      }
+      else if (global_light_status == "off") {
+        global_light_status = "on";
+        digitalWrite(relayPin, HIGH);
+      }
+      else {
+        emergencyFixLight();
+      }
+      vTaskDelay(500);
     }
     else {
-      emergencyFixLight();
+      vTaskDelay(10);
     }
-    delay(200);
   }
 }
