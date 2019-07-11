@@ -3,6 +3,12 @@
 #include "WebServer.h"
 #include "ESPmDNS.h"
 #include "ArduinoJson.h"
+#include "EEPROM.h"
+
+//To do stuff:
+//    (Maybe) Create credentials page before WiFi connection page
+//    Save credentials encrypted in Flash memory
+//    (Maybe) Figure out how to define first connection
 
 typedef struct SSIDListCount {
   char** connectionName;
@@ -167,7 +173,7 @@ String prepareValues () {
   }
   //-----------------------------------------------------------------------------------------------------------//
   JSONencoder.printTo(htmlPage);
-  //-----------------------------------------------------------------------------------------------------------//
+  //------Serial.println("");-----------------------------------------------------------------------------------------------------//
   return htmlPage;
 }
 
@@ -260,6 +266,10 @@ void handleRoot () {
 }
 
 void handleCreatingNewConnection () { 
+  int ssid_start_addr = 0;
+  int ssid_end_addr;
+  int pswd_start_addr;
+  int pswd_end_addr;
   if (!WIFICONNECTED) {
     char ssid_buff [60];
     char pswd_buff [60];
@@ -267,7 +277,47 @@ void handleCreatingNewConnection () {
     new_ssid.toCharArray(ssid_buff, 60);
     String new_password = String (server.arg(1));
     new_password.toCharArray(pswd_buff, 60);
-  
+    
+    //Write on flash memory
+    int mem_addr = 0;
+    while(ssid_buff[mem_addr] != NULL){
+      EEPROM.write(mem_addr, ssid_buff[mem_addr]);
+      ++mem_addr;
+    }
+    ssid_end_addr = mem_addr; 
+    EEPROM.write(mem_addr, 0);
+    ++mem_addr;
+    int j = 0;
+    pswd_start_addr = mem_addr;
+    while(pswd_buff[j] != NULL){
+      EEPROM.write(mem_addr, pswd_buff[j]);
+      ++mem_addr;
+      ++j;
+    }
+    pswd_end_addr = mem_addr;
+    EEPROM.commit();
+
+    //Test leitura flash
+    char ssid_read [60];
+    char pswd_read [60];
+    int k = 0;
+    
+    /*while (EEPROM.read(k) != NULL){
+      ssid_read [k] = EEPROM.read(k);
+      ++k;
+    }
+    ++k;
+    while (EEPROM.read(k) != NULL) {
+      pswd_read [k] = EEPROM.read(k);
+      ++k;
+    }*/
+
+    Serial.print("Connecting to: ");
+    Serial.println(ssid_read);
+    Serial.print("With password: ");
+    Serial.println(pswd_read);
+
+
     //Freeing them mallocs because if it fails we will reload WiFi list
     int i = 0;
     for (i=0; i<mainWiFiList->numberOfConnections; ++i){
@@ -376,12 +426,13 @@ void emergencyFixLight () {
 
  
 void setup() {
+  EEPROM.begin(512);
   Serial.begin(115200);
   global_light_status = "off";
   Serial.println(global_light_status);
   //Turn off the lights
   delay(200);
-  boolean result = WiFi.softAP("ESPsoft", "maniot@winet");
+  boolean result = WiFi.softAP("ESPsoft", "myESP123");
   if(result == true) {
     Serial.println("Ready");
   }
