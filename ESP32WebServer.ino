@@ -6,6 +6,7 @@
 #include "EEPROM.h"
 
 //To do stuff:
+//    **Use pass by reference!
 //    (Maybe) Create credentials page before WiFi connection page
 //    Save credentials encrypted in Flash memory
 //    (Maybe) Figure out how to define first connection
@@ -25,6 +26,7 @@ String new_password;
 SSIDList* mainWiFiList;
 
 int WIFICONNECTED = 0;
+int CREDENTIALS_PRESENT = 0;
 String global_light_status;
 const String light_off = "off";
 const String light_on = "on";
@@ -38,6 +40,7 @@ String prepareConnectionPage () {
   mainWiFiList = availableSSIDs();
   //printSSIDList(wifiList);
   int i = 0;
+  int j = 0;
   String wifiOptions;
   String temp;
   //Builds the drop down list with all the WiFi connections found
@@ -73,6 +76,11 @@ String prepareConnectionPage () {
   "</body>"+
   "</html>";
   //-----------------------------------------------------------------------------------------------------------//
+
+  for (i=0; i<mainWiFiList->numberOfConnections; i++) {
+    free(mainWiFiList->connectionName[i]);
+  }
+  free(mainWiFiList);
   return htmlPage;
 }
 
@@ -135,7 +143,6 @@ String prepareNotFound () {
   //-----------------------------------------------------------------------------------------------------------//
   return htmlPage;
 }
-
 
 String prepareTest () {
   //-----------------------------------------------------------------------------------------------------------//
@@ -231,11 +238,21 @@ int createNewConnection (char* ssid, char* password) {
   WiFi.begin(ssid, password);
   if (WiFi.waitForConnectResult() != WL_CONNECTED) {
     Serial.println("Could not connect to this AP, try another one.");
-    delay(1000);
-    ESP.restart();
+    //Invalidate credentials in Flash
+    EEPROM.write(0,0);
+    EEPROM.commit();
+    return 0;
   }
   
   else{
+    if (!CREDENTIALS_PRESENT) {
+      String flash_ssid = String(ssid);
+      String flash_pswd = String(password);
+      EEPROM.write(0,1);
+      EEPROM.writeString(1,flash_ssid);
+      EEPROM.writeString(61,flash_pswd);
+      EEPROM.commit();
+    }
     WIFICONNECTED = 1;
     Serial.println("");
     Serial.print("Connected to ");
@@ -245,11 +262,11 @@ int createNewConnection (char* ssid, char* password) {
 
     if (MDNS.begin("esp32")) {
       Serial.println("MDNS responder started");
+      return 1;
     }
     else {
       return 0; 
     }
-    return 1;
   }
 }
 
@@ -266,80 +283,54 @@ void handleRoot () {
 }
 
 void handleCreatingNewConnection () { 
-  int ssid_start_addr = 0;
-  int ssid_end_addr;
-  int pswd_start_addr;
-  int pswd_end_addr;
+  char ssid_buff [60];
+  char pswd_buff [60];
   if (!WIFICONNECTED) {
-    char ssid_buff [60];
-    char pswd_buff [60];
-    String new_ssid = String (server.arg(0));
-    new_ssid.toCharArray(ssid_buff, 60);
-    String new_password = String (server.arg(1));
-    new_password.toCharArray(pswd_buff, 60);
-    
-    //Write on flash memory
-    int mem_addr = 0;
-    while(ssid_buff[mem_addr] != NULL){
-      EEPROM.write(mem_addr, ssid_buff[mem_addr]);
-      ++mem_addr;
-    }
-    ssid_end_addr = mem_addr; 
-    EEPROM.write(mem_addr, 0);
-    ++mem_addr;
-    int j = 0;
-    pswd_start_addr = mem_addr;
-    while(pswd_buff[j] != NULL){
-      EEPROM.write(mem_addr, pswd_buff[j]);
-      ++mem_addr;
-      ++j;
-    }
-    pswd_end_addr = mem_addr;
-    EEPROM.commit();
-
-    //Test leitura flash
-    char ssid_read [60];
-    char pswd_read [60];
-    int k = 0;
-    
-    /*while (EEPROM.read(k) != NULL){
-      ssid_read [k] = EEPROM.read(k);
-      ++k;
-    }
-    ++k;
-    while (EEPROM.read(k) != NULL) {
-      pswd_read [k] = EEPROM.read(k);
-      ++k;
-    }*/
-
-    Serial.print("Connecting to: ");
-    Serial.println(ssid_read);
-    Serial.print("With password: ");
-    Serial.println(pswd_read);
-
-
-    //Freeing them mallocs because if it fails we will reload WiFi list
-    int i = 0;
-    for (i=0; i<mainWiFiList->numberOfConnections; ++i){
-      free(mainWiFiList->connectionName[i]);
-    }
-    free(mainWiFiList->connectionName);
-
-    char htmlChar [2000];
-    String htmlToSend = prepareTryingPage(ssid_buff);
-    htmlToSend.toCharArray(htmlChar, 2000);
-    server.send(200, "text/html", htmlChar);
-    delay(2000);
-  
-    if (createNewConnection(ssid_buff, pswd_buff)){
-      Serial.println("Connection successful.");
-      WiFi.softAPdisconnect (true);
+    if (!CREDENTIALS_PRESENT){
+      String new_ssid = String (server.arg(0));
+      String new_pswd = String (server.arg(1));
+      new_ssid.toCharArray(ssid_buff, 60);
+      new_pswd.toCharArray(pswd_buff, 60);
+      Serial.print("Connecting to: ");
+      Serial.println(new_ssid);
+      Serial.print("With password: ");
+      Serial.println(new_pswd);
+      char htmlChar [2000];
+      String htmlToSend = prepareTryingPage(ssid_buff);
+      htmlToSend.toCharArray(htmlChar, 2000);
+      server.send(200, "text/html", htmlChar);
+      delay(2000);
+      if (createNewConnection(ssid_buff, pswd_buff)){
+        Serial.println("Connection successful.");
+        WiFi.softAPdisconnect (true);
+      }
+      else {
+        Serial.println("Connection failed, something went wrong.");
+        delay(1000);
+        ESP.restart();
+      }
     }
     else {
-      Serial.println("Connection failed, something went wrong.");
+      String flash_ssid = EEPROM.readString(1);
+      String flash_pswd = EEPROM.readString(61);
+      flash_ssid.toCharArray(ssid_buff, 60);
+      flash_pswd.toCharArray(pswd_buff, 60);
+      Serial.print("Connecting to: ");
+      Serial.println(ssid_buff);
+      Serial.print("With password: ");
+      Serial.println(pswd_buff);
+      if (createNewConnection(ssid_buff, pswd_buff)){
+        Serial.println("Connection successful.");
+      }
+      else {
+        Serial.println("Connection failed, something went wrong.");
+        delay(1000);
+        ESP.restart();
+      }
     }
   }
   else {
+    //Because ESP32 is already connected somewhere else
     handleNotFound();
   }
 }
@@ -424,20 +415,27 @@ void emergencyFixLight () {
   digitalWrite(relayPin, LOW);
 }
 
- 
 void setup() {
+  WIFICONNECTED = 0;
   EEPROM.begin(512);
+  CREDENTIALS_PRESENT = EEPROM.read(0);
   Serial.begin(115200);
   global_light_status = "off";
   Serial.println(global_light_status);
   //Turn off the lights
   delay(200);
-  boolean result = WiFi.softAP("ESPsoft", "myESP123");
-  if(result == true) {
-    Serial.println("Ready");
+  if (!CREDENTIALS_PRESENT){
+    boolean result = WiFi.softAP("ESPsoft2", "maniot@winet");
+    if(result == true) {
+      Serial.println("Ready");
+    }
+    else {
+      Serial.println("Failed!");
+    }
   }
   else {
-    Serial.println("Failed!");
+    Serial.println("Found credentials in flash. Trying connection.");
+    handleCreatingNewConnection();
   }
 
   pinMode(interruptPin, INPUT);
@@ -448,7 +446,6 @@ void setup() {
   server.on("/commands", handleCommands);
   server.on("/values", handleValues);
   server.onNotFound(handleNotFound);
-  
   server.begin();
 }
  
